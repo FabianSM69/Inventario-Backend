@@ -230,16 +230,22 @@ app.put('/updateproduct/:id', async (req, res) => {
 });
 app.get('/resumen-conteo', async (req, res) => {
   try {
-    const result = await db.query(`
-      SELECT 
-        p.id,
-        p.nombre,
-        p.imagen,
-        p.cantidad_total AS cantidad_registrada,
-        c.cantidad_contada
-      FROM conteo_inventario c
-      INNER JOIN productos p ON p.id = c.producto_id
-    `);
+    const resultado = await db.query(`
+  SELECT 
+    p.id, 
+    p.nombre,
+    p.codigo_barras, -- 👈 asegúrate de incluir esto
+    p.cantidad_total AS registrada,
+    COALESCE(ci.contada, 0) AS contada,
+    COALESCE(ci.contada, 0) - p.cantidad_total AS diferencia,
+    p.imagen
+  FROM productos p
+  LEFT JOIN (
+    SELECT codigo_barras, COUNT(*) AS contada
+    FROM conteo_inventario
+    GROUP BY codigo_barras
+  ) ci ON p.codigo_barras = ci.codigo_barras
+`);
 
     const resumen = result.rows.map(producto => {
       const diferencia = producto.cantidad_contada - producto.cantidad_registrada;
