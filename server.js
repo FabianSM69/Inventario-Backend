@@ -234,7 +234,7 @@ app.get('/resumen-conteo', async (req, res) => {
   SELECT 
     p.id, 
     p.nombre,
-    p.codigo_barras, -- 👈 asegúrate de incluir esto
+    p.codigo_barras,
     p.cantidad_total AS registrada,
     COALESCE(ci.contada, 0) AS contada,
     COALESCE(ci.contada, 0) - p.cantidad_total AS diferencia,
@@ -247,17 +247,21 @@ app.get('/resumen-conteo', async (req, res) => {
   ) ci ON p.codigo_barras = ci.codigo_barras
 `);
 
-    const resumen = resultado.rows.map(producto => {
-      const diferencia = producto.cantidad_contada - producto.cantidad_registrada;
-      return {
-        id: producto.id,
-        nombre: producto.nombre,
-        imagen: producto.imagen,
-        registrada: producto.cantidad_registrada,
-        contada: producto.cantidad_contada,
-        diferencia: diferencia
-      };
-    });
+const resumen = resultado.rows.map(producto => {
+  const diferencia = producto.contada - producto.registrada;
+  return {
+    id: producto.id,
+    nombre: producto.nombre,
+    codigo_barras: producto.codigo_barras,
+    imagen: producto.imagen,
+    registrada: producto.registrada,
+    contada: producto.contada,
+    diferencia: diferencia
+  };
+});
+
+res.json(resumen);
+
 
     res.json(resumen);
   } catch (err) {
