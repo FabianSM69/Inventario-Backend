@@ -262,8 +262,6 @@ const resumen = resultado.rows.map(producto => {
 
 res.json(resumen);
 
-
-    res.json(resumen);
   } catch (err) {
     console.error('❌ Error al obtener resumen de conteo:', err);
     res.status(500).json({ error: 'Error al obtener resumen de conteo' });
