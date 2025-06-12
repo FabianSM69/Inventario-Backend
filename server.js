@@ -414,6 +414,19 @@ app.get('/get-activity-history', async (req, res) => {
     res.status(500).json({ error: 'Error al obtener el historial' });
   }
 });
+app.delete('/reiniciar-conteo/:codigo_barras', async (req, res) => {
+  const { codigo_barras } = req.params;
+  try {
+    await db.query(
+      'DELETE FROM conteo_inventario WHERE codigo_barras = $1',
+      [codigo_barras]
+    );
+    res.status(200).json({ message: 'Conteo reiniciado para el producto' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Error al reiniciar conteo' });
+  }
+});
 app.get('/getproducto/:codigo', async (req, res) => {
   const { codigo } = req.params;
   try {
