@@ -247,7 +247,7 @@ app.get('/resumen-conteo', async (req, res) => {
   ) ci ON p.codigo_barras = ci.codigo_barras
 `);
 
-    const resumen = result.rows.map(producto => {
+    const resumen = resultado.rows.map(producto => {
       const diferencia = producto.cantidad_contada - producto.cantidad_registrada;
       return {
         id: producto.id,
