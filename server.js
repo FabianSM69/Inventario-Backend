@@ -248,14 +248,14 @@ app.get('/resumen-conteo', async (req, res) => {
 `);
 
 const resumen = resultado.rows.map(producto => {
-  const diferencia = producto.contada - producto.registrada;
+  const diferencia = parseFloat(producto.contada) - parseFloat(producto.registrada);
   return {
     id: producto.id,
     nombre: producto.nombre,
-    codigo_barras: producto.codigo_barras,
     imagen: producto.imagen,
-    registrada: producto.registrada,
-    contada: producto.contada,
+    codigo_barras: producto.codigo_barras,
+    registrada: parseFloat(producto.registrada),
+    contada: parseFloat(producto.contada),
     diferencia: diferencia
   };
 });
