@@ -231,42 +231,41 @@ app.put('/updateproduct/:id', async (req, res) => {
 app.get('/resumen-conteo', async (req, res) => {
   try {
     const resultado = await db.query(`
-  SELECT 
-    p.id, 
-    p.nombre,
-    p.codigo_barras,
-    p.cantidad_total AS registrada,
-    COALESCE(ci.contada, 0) AS contada,
-    COALESCE(ci.contada, 0) - p.cantidad_total AS diferencia,
-    p.imagen
-  FROM productos p
-  LEFT JOIN (
-    SELECT codigo_barras, COUNT(*) AS contada
-    FROM conteo_inventario
-    GROUP BY codigo_barras
-  ) ci ON p.codigo_barras = ci.codigo_barras
-`);
+      SELECT 
+        p.id, 
+        p.nombre,
+        p.codigo_barras,
+        p.cantidad_total AS registrada,
+        COALESCE(ci.contada, 0) AS contada,
+        COALESCE(ci.contada, 0) - p.cantidad_total AS diferencia,
+        p.imagen
+      FROM productos p
+      LEFT JOIN (
+        SELECT 
+          codigo_barras, 
+          SUM(cantidad_contada) AS contada
+        FROM conteo_inventario
+        GROUP BY codigo_barras
+      ) ci ON p.codigo_barras = ci.codigo_barras
+    `);
 
-const resumen = resultado.rows.map(producto => {
-  const diferencia = parseFloat(producto.contada) - parseFloat(producto.registrada);
-  return {
-    id: producto.id,
-    nombre: producto.nombre,
-    imagen: producto.imagen,
-    codigo_barras: producto.codigo_barras,
-    registrada: parseFloat(producto.registrada),
-    contada: parseFloat(producto.contada),
-    diferencia: diferencia
-  };
-});
+    const resumen = resultado.rows.map(producto => ({
+      id: producto.id,
+      nombre: producto.nombre,
+      codigo_barras: producto.codigo_barras,
+      imagen: producto.imagen,
+      registrada: producto.registrada,
+      contada: producto.contada,
+      diferencia: producto.diferencia
+    }));
 
-res.json(resumen);
-
+    return res.json(resumen);
   } catch (err) {
     console.error('❌ Error al obtener resumen de conteo:', err);
     res.status(500).json({ error: 'Error al obtener resumen de conteo' });
   }
 });
+
 app.post('/finalizar-inventario', async (req, res) => {
   try {
     const conteos = await db.query(`
