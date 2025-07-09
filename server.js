@@ -367,51 +367,69 @@ app.get('/getconteofisico', async (req, res) => {
 
 app.post('/registersalida', async (req, res) => {
   const {
-    id, unidades_vendidas = 0, unidades_devueltas = 0, motivo_devolucion = '',
-    merma = 0, motivo_merma = '', precio_venta = 0
+    id,
+    unidades_vendidas = 0,
+    unidades_devueltas = 0,
+    motivo_devolucion = '',
+    merma = 0,
+    motivo_merma = '',
+    precio_venta = 0
   } = req.body;
 
   if (!id) return res.status(400).json({ error: 'ID del producto es obligatorio' });
 
   try {
-    const result = await db.query('SELECT * FROM productos WHERE id = $1', [id]);
-    const producto = result.rows[0];
-    if (!producto) return res.status(404).json({ error: 'Producto no encontrado' });
+    // 1) Insertar en salidas
+    await db.query(`
+      INSERT INTO salidas 
+        (producto_id, unidades_vendidas, unidades_devueltas, merma, precio_venta, motivo_devolucion, motivo_merma)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `, [id, unidades_vendidas, unidades_devueltas, merma, precio_venta, motivo_devolucion, motivo_merma]);
 
-    const cantidad_total = producto.cantidad_total - unidades_vendidas - unidades_devueltas - merma;
-    const precio_total = cantidad_total * producto.precio_unitario;
+    // 2) Actualizar stock en productos
+    const prodRes = await db.query('SELECT cantidad_total, precio_unitario FROM productos WHERE id = $1', [id]);
+    if (prodRes.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
+    const { cantidad_total: actual, precio_unitario } = prodRes.rows[0];
+    const nuevoTotal = actual - unidades_vendidas - unidades_devueltas - merma;
+    const nuevoPrecioTotal = nuevoTotal * precio_unitario;
 
     await db.query(`
-      UPDATE productos SET 
-        unidades_vendidas = unidades_vendidas + $1,
-        unidades_devueltas = unidades_devueltas + $2,
-        motivo_devolucion = $3,
-        merma = merma + $4,
-        motivo_merma = $5,
-        precio_venta = $6,
-        cantidad_total = $7,
-        precio_total = $8
-      WHERE id = $9
+      UPDATE productos 
+      SET cantidad_total = $1, precio_total = $2, unidades_vendidas = unidades_vendidas + $3, unidades_devueltas = unidades_devueltas + $4, merma = merma + $5, precio_venta = precio_venta + $6
+      WHERE id = $7
     `, [
+      nuevoTotal,
+      nuevoPrecioTotal,
       unidades_vendidas,
       unidades_devueltas,
-      motivo_devolucion,
       merma,
-      motivo_merma,
       precio_venta,
-      cantidad_total,
-      precio_total,
       id
     ]);
 
-    const actividad = `Salida registrada para producto ID ${id}:\n- Vendidas: ${unidades_vendidas}\n- Devueltas: ${unidades_devueltas}\n- Mermadas: ${merma}`;
-    const fecha = new Date();
-
-    await db.query('INSERT INTO historial_actividad (fecha, usuario, accion, detalles) VALUES ($1, $2, $3, $4)', [fecha, 'Admin', 'Salida', actividad]);
-
-    res.json({ message: 'Salida registrada exitosamente' });
-  } catch {
-    res.status(500).json({ error: 'Error al registrar la salida' });
+    res.json({ message: 'Salida registrada correctamente' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar salida' });
+  }
+});
+app.get('/stats/masVendidos', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        p.id, 
+        p.nombre, 
+        SUM(s.unidades_vendidas) AS total_vendidas 
+      FROM salidas s
+      JOIN productos p ON p.id = s.producto_id
+      GROUP BY p.id, p.nombre
+      ORDER BY total_vendidas DESC
+      LIMIT 10
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'No se pudieron obtener los productos más vendidos' });
   }
 });
 app.get('/get-activity-history', async (req, res) => {
