@@ -29,7 +29,8 @@ const transporter = nodemailer.createTransport({
 app.post('/send-email', (req, res) => {
   const { name, email, message } = req.body;
   const mailOptions = {
-    from: email,
+    from: process.env.GMAIL_USER,
+    replyTo: email,
     to: 'invsupp12@gmail.com',
     subject: 'Nuevo mensaje de soporte',
     text: `De: ${name} <${email}>\n\nMensaje:\n\n${message}`,
