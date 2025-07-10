@@ -308,27 +308,24 @@ app.post('/registersalida', async (req, res) => {
 
 // --- Estadísticas ---
 // 1) Productos más vendidos este mes
-app.get("/stats/mas-vendidos-mes", async (_, res) => {
+app.get('/stats/ventas-mensuales', async (_, res) => {
   try {
     const { rows } = await db.query(`
-      SELECT 
-        p.id,
-        p.nombre,
-        SUM(s.cantidad) AS total_vendido
+      SELECT p.nombre,
+             SUM(s.cantidad) AS total_vendidas
       FROM salidas_fifo s
-      JOIN productos p ON p.id = s.producto_id
-      WHERE date_trunc('month', s.fecha_salida) = date_trunc('month', CURRENT_DATE)
-      GROUP BY p.id, p.nombre
-      ORDER BY total_vendido DESC
+      JOIN productos p    ON p.id = s.producto_id
+      WHERE DATE_TRUNC('month', s.fecha_salida) = DATE_TRUNC('month', CURRENT_DATE)
+      GROUP BY p.nombre
+      ORDER BY total_vendidas DESC
       LIMIT 10
     `);
     res.json(rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Error al obtener más vendidos este mes" });
+    res.status(500).json({ error: 'Error al obtener ventas mensuales' });
   }
 });
-
 // 2) Entradas del día de hoy
 app.get("/stats/entradas-hoy", async (_, res) => {
   try {
