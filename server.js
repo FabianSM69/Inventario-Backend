@@ -86,6 +86,7 @@ app.get('/getproductos', async (_, res) => {
     res.status(500).json({ error: 'Error al obtener productos' });
   }
 });
+// 1) Modifica tu REGISTER PRODUCT para devolver el id
 app.post('/registerproduct', async (req, res) => {
   const { nombre, cantidad_entrada, cantidad_devuelta_cliente = 0, precio_unitario, imagen } = req.body;
   if (!nombre || !cantidad_entrada || !precio_unitario) {
@@ -95,18 +96,42 @@ app.post('/registerproduct', async (req, res) => {
   const precio_total = cantidad_total * precio_unitario;
   const fecha_registro = new Date();
   try {
-    await db.query(`
-      INSERT INTO productos
-      (nombre,cantidad_entrada,cantidad_total,cantidad_devuelta_cliente,precio_unitario,precio_total,imagen,fecha_registro)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-    `, [nombre, cantidad_entrada, cantidad_total, cantidad_devuelta_cliente, precio_unitario, precio_total, imagen, fecha_registro]);
+    // PEDIMOS RETURNING id
+    const result = await db.query(
+      `INSERT INTO productos
+         (nombre,cantidad_entrada,cantidad_total,cantidad_devuelta_cliente,precio_unitario,precio_total,imagen,fecha_registro)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id`,
+      [nombre, cantidad_entrada, cantidad_total, cantidad_devuelta_cliente, precio_unitario, precio_total, imagen, fecha_registro]
+    );
+    const newId = result.rows[0].id;
     await logActividad('Admin','Registro', `Producto '${nombre}' con ${cantidad_entrada}u a $${precio_unitario}`);
-    res.json({ message: 'Producto registrado exitosamente' });
+    // Respondemos el id para que el frontend lo coja
+    res.json({ id: newId });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al registrar producto' });
   }
 });
+
+// 2) Nueva ruta GET /lotes para listar por producto_id
+app.get('/lotes', async (req, res) => {
+  const { producto_id } = req.query;
+  if (!producto_id) {
+    return res.status(400).json({ error: 'producto_id es obligatorio' });
+  }
+  try {
+    const { rows } = await db.query(
+      'SELECT id, cantidad, costo_unitario, fecha_lote FROM lotes WHERE producto_id = $1 ORDER BY fecha_lote ASC',
+      [producto_id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener lotes' });
+  }
+});
+
 app.put('/modifyproduct', async (req, res) => {
   const { id, cantidad_total, precio_unitario } = req.body;
   if (!id || cantidad_total == null || precio_unitario == null) {
