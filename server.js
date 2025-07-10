@@ -1,3 +1,4 @@
+// server.js
 import dotenv from "dotenv";
 import express from "express";
 import { Pool } from "pg";
@@ -26,6 +27,16 @@ const transporter = nodemailer.createTransport({
   tls: { rejectUnauthorized: false },
 });
 
+// --- Helpers ---
+async function logActividad(usuario, accion, detalles) {
+  const fecha = new Date();
+  await db.query(
+    'INSERT INTO historial_actividad (fecha, usuario, accion, detalles) VALUES ($1, $2, $3, $4)',
+    [fecha, usuario, accion, detalles]
+  );
+}
+
+// --- Rutas de soporte/email ---
 app.post('/send-email', (req, res) => {
   const { name, email, message } = req.body;
   const mailOptions = {
@@ -35,377 +46,232 @@ app.post('/send-email', (req, res) => {
     subject: 'Nuevo mensaje de soporte',
     text: `De: ${name} <${email}>\n\nMensaje:\n\n${message}`,
   };
-
-  transporter.sendMail(mailOptions, (err) => {
+  transporter.sendMail(mailOptions, err => {
     if (err) return res.status(500).json({ error: 'Error al enviar el correo' });
-    res.status(200).json({ message: 'Correo enviado exitosamente' });
+    res.json({ message: 'Correo enviado exitosamente' });
   });
 });
 
+// --- Autenticación ---
 app.post('/register', async (req, res) => {
   const { username, password, role = "user" } = req.body;
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const hashed = await bcrypt.hash(password, 10);
   try {
-    await db.query(
-      'INSERT INTO users (username, password, role) VALUES ($1, $2, $3)',
-      [username, hashedPassword, role]
-    );
+    await db.query('INSERT INTO users (username,password,role) VALUES($1,$2,$3)', [username, hashed, role]);
     res.json({ message: 'Usuario registrado exitosamente!' });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Error registrando usuario' });
   }
 });
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   try {
-    const result = await db.query('SELECT * FROM users WHERE username = $1', [username]);
-    const user = result.rows[0];
-
-    if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(401).json({ error: 'Contraseña incorrecta' });
-
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
-      "tu_secreto_jwt",
-      { expiresIn: "1h" }
-    );
-
-    res.json({ message: 'Inicio de sesión exitoso!', token, role: user.role });
-  } catch (err) {
+    const { rows } = await db.query('SELECT * FROM users WHERE username=$1', [username]);
+    if (!rows[0]) return res.status(401).json({ error: 'Usuario no encontrado' });
+    const ok = await bcrypt.compare(password, rows[0].password);
+    if (!ok) return res.status(401).json({ error: 'Contraseña incorrecta' });
+    const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.json({ message: 'Inicio de sesión exitoso!', token, role: rows[0].role });
+  } catch {
     res.status(500).json({ error: 'Error en el servidor' });
   }
 });
 
-app.get('/getproductos', async (req, res) => {
+// --- Productos ---
+app.get('/getproductos', async (_, res) => {
   try {
-    const result = await db.query('SELECT * FROM productos');
-    res.json(result.rows);
+    const { rows } = await db.query('SELECT * FROM productos ORDER BY id');
+    res.json(rows);
   } catch {
-    res.status(500).json({ error: 'Error al obtener los productos' });
-  }
-});
-
-app.put('/modifyproduct', async (req, res) => {
-  const { id, cantidad_total, precio_unitario } = req.body;
-
-  if (!id || cantidad_total === undefined || precio_unitario === undefined) {
-    return res.status(400).json({ error: 'Faltan parámetros necesarios' });
-  }
-
-  try {
-    await db.query(
-      'UPDATE productos SET cantidad_total = $1, precio_unitario = $2 WHERE id = $3',
-      [cantidad_total, precio_unitario, id]
-    );
-
-    const actividad = `Producto con ID ${id} modificado con nueva cantidad ${cantidad_total} y precio ${precio_unitario}`;
-    const fecha = new Date();
-
-    await db.query(
-      'INSERT INTO historial_actividad (fecha, usuario, accion, detalles) VALUES ($1, $2, $3, $4)',
-      [fecha, 'Admin', 'Modificación', actividad]
-    );
-
-    res.json({ message: 'Producto modificado exitosamente' });
-  } catch {
-    res.status(500).json({ error: 'Error al modificar el producto' });
-  }
-});
-
-app.delete('/deleteproduct/:id', async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    await db.query('DELETE FROM productos WHERE id = $1', [id]);
-
-    const actividad = `Producto con ID ${id} eliminado`;
-    const fecha = new Date();
-
-    await db.query(
-      'INSERT INTO historial_actividad (fecha, usuario, accion, detalles) VALUES ($1, $2, $3, $4)',
-      [fecha, 'Admin', 'Eliminación', actividad]
-    );
-
-    res.json({ message: 'Producto eliminado exitosamente' });
-  } catch {
-    res.status(500).json({ error: 'Error al eliminar el producto' });
+    res.status(500).json({ error: 'Error al obtener productos' });
   }
 });
 app.post('/registerproduct', async (req, res) => {
-  const { nombre, cantidad_entrada, cantidad_devuelta_cliente, precio_unitario, imagen } = req.body;
-
+  const { nombre, cantidad_entrada, cantidad_devuelta_cliente = 0, precio_unitario, imagen } = req.body;
   if (!nombre || !cantidad_entrada || !precio_unitario) {
-    return res.status(400).json({ error: 'Todos los campos obligatorios deben completarse' });
+    return res.status(400).json({ error: 'Faltan campos obligatorios' });
   }
-
   const cantidad_total = cantidad_entrada;
   const precio_total = cantidad_total * precio_unitario;
   const fecha_registro = new Date();
-
   try {
     await db.query(`
-      INSERT INTO productos 
-      (nombre, cantidad_entrada, cantidad_total, cantidad_devuelta_cliente, precio_unitario, precio_total, imagen, fecha_registro) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `, [nombre, cantidad_entrada, cantidad_total, cantidad_devuelta_cliente || 0, precio_unitario, precio_total, imagen, fecha_registro]);
-
-    const actividad = `Producto '${nombre}' registrado con ${cantidad_entrada} unidades a $${precio_unitario}`;
-    await db.query(
-      'INSERT INTO historial_actividad (fecha, usuario, accion, detalles) VALUES ($1, $2, $3, $4)',
-      [fecha_registro, 'Admin', 'Registro', actividad]
-    );
-
+      INSERT INTO productos
+      (nombre,cantidad_entrada,cantidad_total,cantidad_devuelta_cliente,precio_unitario,precio_total,imagen,fecha_registro)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+    `, [nombre, cantidad_entrada, cantidad_total, cantidad_devuelta_cliente, precio_unitario, precio_total, imagen, fecha_registro]);
+    await logActividad('Admin','Registro', `Producto '${nombre}' con ${cantidad_entrada}u a $${precio_unitario}`);
     res.json({ message: 'Producto registrado exitosamente' });
   } catch (err) {
-    console.error("❌ Error al registrar producto:", err);
-    res.status(500).json({ error: 'Error al registrar el producto en la base de datos' });
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar producto' });
   }
 });
-app.put('/asignar-codigo/:id', async (req, res) => {
-  const { id } = req.params;
-  const { codigo_barras } = req.body;
-
-  if (!codigo_barras) {
-    return res.status(400).json({ error: 'El código de barras es obligatorio' });
+app.put('/modifyproduct', async (req, res) => {
+  const { id, cantidad_total, precio_unitario } = req.body;
+  if (!id || cantidad_total == null || precio_unitario == null) {
+    return res.status(400).json({ error: 'Faltan parámetros' });
   }
-
   try {
-    await db.query(
-      'UPDATE productos SET codigo_barras = $1 WHERE id = $2',
-      [codigo_barras, id]
-    );
-
-    res.json({ message: 'Código de barras asignado correctamente' });
-  } catch (err) {
-    console.error('❌ Error al asignar código:', err);
-    res.status(500).json({ error: 'Error al asignar el código de barras' });
-  }
-});
-
-app.get('/productos-sin-codigo', async (req, res) => {
-  try {
-    const result = await db.query('SELECT id, nombre FROM productos WHERE codigo_barras IS NULL');
-    res.json(result.rows);
-  } catch (err) {
-    console.error('❌ Error al obtener productos sin código:', err);
-    res.status(500).json({ error: 'Error al obtener productos sin código' });
+    await db.query('UPDATE productos SET cantidad_total=$1,precio_unitario=$2 WHERE id=$3',
+      [cantidad_total, precio_unitario, id]);
+    await logActividad('Admin','Modificación', `ID${id} cantidad=${cantidad_total} precio=${precio_unitario}`);
+    res.json({ message: 'Producto modificado exitosamente' });
+  } catch {
+    res.status(500).json({ error: 'Error al modificar producto' });
   }
 });
 app.put('/updateproduct/:id', async (req, res) => {
-  const id = parseInt(req.params.id);
-  const { precio_unitario, cantidad_total, cantidad_devuelta_cliente, precio_total, imagen } = req.body;
-
-  if (isNaN(id) || precio_unitario === undefined || cantidad_total === undefined || precio_total === undefined) {
-    return res.status(400).json({ error: 'Datos inválidos o incompletos' });
+  const id = +req.params.id;
+  const { precio_unitario, cantidad_total, cantidad_devuelta_cliente = 0, precio_total, imagen } = req.body;
+  if (isNaN(id) || precio_unitario == null || cantidad_total == null || precio_total == null) {
+    return res.status(400).json({ error: 'Datos inválidos' });
   }
-
   try {
-    const result = await db.query(`
+    const { rowCount } = await db.query(`
       UPDATE productos SET 
-        precio_unitario = $1, 
-        cantidad_total = $2, 
-        cantidad_devuelta_cliente = $3, 
-        precio_total = $4,
-        imagen = $5
-      WHERE id = $6
-    `, [precio_unitario, cantidad_total, cantidad_devuelta_cliente || 0, precio_total, imagen, id]);
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Producto no encontrado' });
-    }
-
-    const actividad = `Producto con ID ${id} actualizado (precio_unitario=${precio_unitario}, cantidad_total=${cantidad_total}, devueltos=${cantidad_devuelta_cliente}, precio_total=${precio_total})`;
-    const fecha = new Date();
-
-    await db.query(
-      'INSERT INTO historial_actividad (fecha, usuario, accion, detalles) VALUES ($1, $2, $3, $4)',
-      [fecha, 'Admin', 'Modificación', actividad]
-    );
-
-    res.json({ message: '✅ Producto actualizado exitosamente' });
-  } catch (err) {
-    res.status(500).json({ error: 'Error al actualizar el producto' });
+        precio_unitario=$1,
+        cantidad_total=$2,
+        cantidad_devuelta_cliente=$3,
+        precio_total=$4,
+        imagen=$5
+      WHERE id=$6
+    `, [precio_unitario, cantidad_total, cantidad_devuelta_cliente, precio_total, imagen, id]);
+    if (!rowCount) return res.status(404).json({ error: 'Producto no existe' });
+    await logActividad('Admin','Modificación', `ID${id} PU=${precio_unitario} CT=${cantidad_total} CD=${cantidad_devuelta_cliente} PT=${precio_total}`);
+    res.json({ message: 'Producto actualizado exitosamente' });
+  } catch {
+    res.status(500).json({ error: 'Error al actualizar producto' });
   }
 });
-app.get('/resumen-conteo', async (req, res) => {
+app.delete('/deleteproduct/:id', async (req, res) => {
+  const id = +req.params.id;
   try {
-    const resultado = await db.query(`
-      SELECT 
-        p.id, 
-        p.nombre,
-        p.codigo_barras,
-        p.cantidad_total AS registrada,
-        COALESCE(ci.contada, 0) AS contada,
-        COALESCE(ci.contada, 0) - p.cantidad_total AS diferencia,
-        p.imagen
-      FROM productos p
-      LEFT JOIN (
-        SELECT 
-          codigo_barras, 
-          SUM(cantidad_contada) AS contada
-        FROM conteo_inventario
-        GROUP BY codigo_barras
-      ) ci ON p.codigo_barras = ci.codigo_barras
-    `);
-
-    const resumen = resultado.rows.map(producto => ({
-      id: producto.id,
-      nombre: producto.nombre,
-      codigo_barras: producto.codigo_barras,
-      imagen: producto.imagen,
-      registrada: producto.registrada,
-      contada: producto.contada,
-      diferencia: producto.diferencia
-    }));
-
-    return res.json(resumen);
-  } catch (err) {
-    console.error('❌ Error al obtener resumen de conteo:', err);
-    res.status(500).json({ error: 'Error al obtener resumen de conteo' });
+    await db.query('DELETE FROM productos WHERE id=$1', [id]);
+    await logActividad('Admin','Eliminación', `ID${id}`);
+    res.json({ message: 'Producto eliminado exitosamente' });
+  } catch {
+    res.status(500).json({ error: 'Error al eliminar producto' });
   }
 });
 
-app.post('/finalizar-inventario', async (req, res) => {
+// --- Códigos de barras ---
+app.put('/asignar-codigo/:id', async (req, res) => {
+  const id = +req.params.id;
+  const { codigo_barras } = req.body;
+  if (!codigo_barras) return res.status(400).json({ error: 'Código obligatorio' });
   try {
-    const conteos = await db.query(`
-      SELECT producto_id, cantidad_contada 
-      FROM conteo_inventario
-    `);
-
-    for (const row of conteos.rows) {
-      const { producto_id, cantidad_contada } = row;
-
-      // Obtener el precio_unitario actual
-      const producto = await db.query(`SELECT precio_unitario FROM productos WHERE id = $1`, [producto_id]);
-      if (producto.rowCount === 0) continue;
-
-      const precio_unitario = producto.rows[0].precio_unitario;
-      const nuevo_precio_total = cantidad_contada * precio_unitario;
-
-      // Actualizar producto
-      await db.query(`
-        UPDATE productos
-        SET cantidad_total = $1, precio_total = $2
-        WHERE id = $3
-      `, [cantidad_contada, nuevo_precio_total, producto_id]);
-
-      // Registrar en historial
-      const fecha = new Date();
-      const actividad = `Inventario finalizado: producto ID ${producto_id} actualizado con ${cantidad_contada} unidades.`;
-      await db.query(`
-        INSERT INTO historial_actividad (fecha, usuario, accion, detalles)
-        VALUES ($1, $2, $3, $4)
-      `, [fecha, 'Admin', 'Finalización de inventario', actividad]);
-    }
-
-    // Limpiar tabla conteo
-    await db.query('DELETE FROM conteo_inventario');
-
-    res.json({ message: 'Inventario finalizado y conteo actualizado exitosamente' });
-  } catch (err) {
-    console.error('❌ Error al finalizar inventario:', err);
-    res.status(500).json({ error: 'Error al finalizar inventario' });
+    await db.query('UPDATE productos SET codigo_barras=$1 WHERE id=$2', [codigo_barras, id]);
+    res.json({ message: 'Código asignado correctamente' });
+  } catch {
+    res.status(500).json({ error: 'Error al asignar código' });
+  }
+});
+app.get('/productos-sin-codigo', async (_, res) => {
+  try {
+    const { rows } = await db.query('SELECT id,nombre FROM productos WHERE codigo_barras IS NULL');
+    res.json(rows);
+  } catch {
+    res.status(500).json({ error: 'Error al obtener sin código' });
   }
 });
 
+// --- Conteo físico desde app móvil ---
 app.post('/registrar-conteo', async (req, res) => {
   const { codigo_barras } = req.body;
-
-  if (!codigo_barras) {
-    return res.status(400).json({ error: 'El código de barras es obligatorio' });
-  }
-
+  if (!codigo_barras) return res.status(400).json({ error: 'Código obligatorio' });
   try {
-    // Buscar el producto por código de barras
-    const result = await db.query('SELECT id, nombre FROM productos WHERE codigo_barras = $1', [codigo_barras]);
-    const producto = result.rows[0];
-
-    if (!producto) {
-      return res.status(404).json({ error: 'Producto no encontrado' });
-    }
-
-    // Verificar si ya existe un conteo para ese producto
-    const conteoExistente = await db.query(
-      'SELECT id, cantidad_contada FROM conteo_inventario WHERE producto_id = $1',
-      [producto.id]
-    );
-
-    if (conteoExistente.rowCount > 0) {
-      // Si ya existe, incrementa la cantidad contada
-      await db.query(
-        'UPDATE conteo_inventario SET cantidad_contada = cantidad_contada + 1, fecha = CURRENT_TIMESTAMP WHERE producto_id = $1',
-        [producto.id]
-      );
+    const prod = (await db.query('SELECT id,nombre FROM productos WHERE codigo_barras=$1', [codigo_barras])).rows[0];
+    if (!prod) return res.status(404).json({ error: 'Producto no encontrado' });
+    const exist = (await db.query(
+      'SELECT id FROM conteo_inventario WHERE producto_id=$1', [prod.id]
+    )).rowCount;
+    if (exist) {
+      await db.query('UPDATE conteo_inventario SET cantidad_contada = cantidad_contada+1, fecha=CURRENT_TIMESTAMP WHERE producto_id=$1', [prod.id]);
     } else {
-      // Si no existe, inserta un nuevo registro
-      await db.query(
-        'INSERT INTO conteo_inventario (producto_id, codigo_barras, nombre, cantidad_contada) VALUES ($1, $2, $3, 1)',
-        [producto.id, codigo_barras, producto.nombre]
-      );
+      await db.query('INSERT INTO conteo_inventario(producto_id,codigo_barras,nombre,cantidad_contada) VALUES($1,$2,$3,1)', [prod.id, codigo_barras, prod.nombre]);
     }
-
     res.json({ message: 'Conteo registrado exitosamente' });
-  } catch (err) {
-    console.error('❌ Error al registrar conteo:', err);
-    res.status(500).json({ error: 'Error al registrar el conteo' });
+  } catch {
+    res.status(500).json({ error: 'Error al registrar conteo' });
   }
 });
-app.get('/getconteofisico', async (req, res) => {
+app.get('/getconteofisico', async (_, res) => {
   try {
-    const result = await db.query(`
-      SELECT producto_id, cantidad_contada 
-      FROM conteo_inventario
-    `);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('❌ Error al obtener conteo físico:', err);
+    const { rows } = await db.query('SELECT producto_id,cantidad_contada FROM conteo_inventario');
+    res.json(rows);
+  } catch {
     res.status(500).json({ error: 'Error al obtener conteo físico' });
   }
 });
+app.delete('/reiniciar-conteo/:codigo_barras', async (req, res) => {
+  const cb = req.params.codigo_barras;
+  try {
+    await db.query('DELETE FROM conteo_inventario WHERE codigo_barras=$1', [cb]);
+    res.json({ message: 'Conteo reiniciado' });
+  } catch {
+    res.status(500).json({ error: 'Error al reiniciar conteo' });
+  }
+});
 
+// --- Rutas de resumen e historial ---
+app.get('/resumen-conteo', async (_, res) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT p.id,p.nombre,p.codigo_barras,
+        p.cantidad_total AS registrada,
+        COALESCE(ci.contada,0) AS contada,
+        COALESCE(ci.contada,0)-p.cantidad_total AS diferencia,
+        p.imagen
+      FROM productos p
+      LEFT JOIN (
+        SELECT codigo_barras,SUM(cantidad_contada) contada
+        FROM conteo_inventario GROUP BY codigo_barras
+      ) ci ON p.codigo_barras=ci.codigo_barras
+    `);
+    res.json(rows);
+  } catch {
+    res.status(500).json({ error: 'Error al obtener resumen' });
+  }
+});
+app.get('/get-activity-history', async (_, res) => {
+  try {
+    const { rows } = await db.query('SELECT * FROM historial_actividad ORDER BY fecha DESC');
+    res.json(rows);
+  } catch {
+    res.status(500).json({ error: 'Error al obtener historial' });
+  }
+});
+
+// --- Salidas simples (actualiza stock y registra en tabla salidas) ---
 app.post('/registersalida', async (req, res) => {
   const {
-    id,
-    unidades_vendidas = 0,
-    unidades_devueltas = 0,
-    motivo_devolucion = '',
-    merma = 0,
-    motivo_merma = '',
+    id, unidades_vendidas = 0, unidades_devueltas = 0,
+    merma = 0, motivo_devolucion = '', motivo_merma = '',
     precio_venta = 0
   } = req.body;
-
-  if (!id) return res.status(400).json({ error: 'ID del producto es obligatorio' });
-
+  if (!id) return res.status(400).json({ error: 'ID obligatorio' });
   try {
     // 1) Insertar en salidas
     await db.query(`
-      INSERT INTO salidas 
-        (producto_id, unidades_vendidas, unidades_devueltas, merma, precio_venta, motivo_devolucion, motivo_merma)
-      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      INSERT INTO salidas
+      (producto_id,unidades_vendidas,unidades_devueltas,merma,precio_venta,motivo_devolucion,motivo_merma)
+      VALUES($1,$2,$3,$4,$5,$6,$7)
     `, [id, unidades_vendidas, unidades_devueltas, merma, precio_venta, motivo_devolucion, motivo_merma]);
 
     // 2) Actualizar stock en productos
-    const prodRes = await db.query('SELECT cantidad_total, precio_unitario FROM productos WHERE id = $1', [id]);
-    if (prodRes.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
-    const { cantidad_total: actual, precio_unitario } = prodRes.rows[0];
-    const nuevoTotal = actual - unidades_vendidas - unidades_devueltas - merma;
-    const nuevoPrecioTotal = nuevoTotal * precio_unitario;
-
+    const p = (await db.query('SELECT cantidad_total,precio_unitario FROM productos WHERE id=$1', [id])).rows[0];
+    const nuevoTotal = p.cantidad_total - unidades_vendidas - unidades_devueltas - merma;
+    const nuevoPrecioTotal = nuevoTotal * p.precio_unitario;
     await db.query(`
-      UPDATE productos 
-      SET cantidad_total = $1, precio_total = $2, unidades_vendidas = unidades_vendidas + $3, unidades_devueltas = unidades_devueltas + $4, merma = merma + $5, precio_venta = precio_venta + $6
-      WHERE id = $7
-    `, [
-      nuevoTotal,
-      nuevoPrecioTotal,
-      unidades_vendidas,
-      unidades_devueltas,
-      merma,
-      precio_venta,
-      id
-    ]);
+      UPDATE productos SET
+        cantidad_total=$1, precio_total=$2,
+        unidades_vendidas = unidades_vendidas + $3,
+        unidades_devueltas = unidades_devueltas + $4,
+        merma = merma + $5,
+        precio_venta = precio_venta + $6
+      WHERE id=$7
+    `, [nuevoTotal, nuevoPrecioTotal, unidades_vendidas, unidades_devueltas, merma, precio_venta, id]);
 
     res.json({ message: 'Salida registrada correctamente' });
   } catch (err) {
@@ -413,65 +279,126 @@ app.post('/registersalida', async (req, res) => {
     res.status(500).json({ error: 'Error al registrar salida' });
   }
 });
-app.get('/stats/masVendidos', async (req, res) => {
+
+// --- Estadísticas ---
+app.get('/stats/masVendidos', async (_, res) => {
   try {
-    const result = await db.query(`
-      SELECT 
-        p.id, 
-        p.nombre, 
-        SUM(s.unidades_vendidas) AS total_vendidas 
+    const { rows } = await db.query(`
+      SELECT p.id,p.nombre,SUM(s.unidades_vendidas) AS total_vendidas
       FROM salidas s
-      JOIN productos p ON p.id = s.producto_id
-      GROUP BY p.id, p.nombre
+      JOIN productos p ON p.id=s.producto_id
+      GROUP BY p.id,p.nombre
       ORDER BY total_vendidas DESC
       LIMIT 10
     `);
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'No se pudieron obtener los productos más vendidos' });
-  }
-});
-app.get('/get-activity-history', async (req, res) => {
-  try {
-    const result = await db.query('SELECT * FROM historial_actividad ORDER BY fecha DESC');
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: 'Error al obtener el historial' });
-  }
-});
-app.delete('/reiniciar-conteo/:codigo_barras', async (req, res) => {
-  const { codigo_barras } = req.params;
-  try {
-    await db.query(
-      'DELETE FROM conteo_inventario WHERE codigo_barras = $1',
-      [codigo_barras]
-    );
-    res.status(200).json({ message: 'Conteo reiniciado para el producto' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Error al reiniciar conteo' });
-  }
-});
-app.get('/getproducto/:codigo', async (req, res) => {
-  const { codigo } = req.params;
-  try {
-    const result = await db.query(
-      'SELECT * FROM productos WHERE codigo_barras = $1',
-      [codigo]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Producto no encontrado' });
-    }
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: 'Error al obtener el producto' });
+    res.json(rows);
+  } catch {
+    res.status(500).json({ error: 'Error al obtener más vendidos' });
   }
 });
 
-app.get("/", (req, res) => {
-  res.send("Servidor funcionando...");
+// --- FIFO de lotes (básico) ---
+// Insertar lote
+app.post('/lotes', async (req, res) => {
+  const { producto_id, cantidad, costo_unitario, fecha_lote } = req.body;
+  if (!producto_id || !cantidad || !costo_unitario) {
+    return res.status(400).json({ error: 'Faltan datos de lote' });
+  }
+  try {
+    await db.query(`
+      INSERT INTO lotes
+      (producto_id,cantidad,costo_unitario,fecha_lote)
+      VALUES($1,$2,$3,$4)
+    `, [producto_id, cantidad, costo_unitario, fecha_lote || new Date()]);
+    res.json({ message: 'Lote registrado (FIFO)' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar lote' });
+  }
 });
+app.put('/lotes/:id', async (req, res) => {
+  const loteId = +req.params.id;
+  const { cantidad, fecha_lote } = req.body;
+  if (isNaN(loteId) || cantidad == null) {
+    return res.status(400).json({ error: 'Datos inválidos' });
+  }
+  try {
+    // 1) Leer lote actual
+    const { rows } = await db.query(
+      'SELECT producto_id, cantidad AS cantidad_old FROM lotes WHERE id=$1',
+      [loteId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Lote no encontrado' });
+    const { producto_id, cantidad_old } = rows[0];
+
+    // 2) Actualizar lote
+    await db.query(
+      'UPDATE lotes SET cantidad=$1, fecha_lote=$2 WHERE id=$3',
+      [cantidad, fecha_lote || new Date(), loteId]
+    );
+
+    // 3) Ajustar stock en productos (restar el viejo, sumar el nuevo)
+    const delta = cantidad - cantidad_old;
+    await db.query(
+      `UPDATE productos
+         SET cantidad_total = cantidad_total + $1,
+             precio_total   = precio_unitario * (cantidad_total + $1)
+       WHERE id = $2`,
+      [delta, producto_id]
+    );
+
+    await logActividad('Admin', 'Ajuste de lote', `Lote ${loteId}: Δcantidad=${delta}`);
+    res.json({ message: 'Lote actualizado correctamente' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar lote' });
+  }
+});
+// Salida FIFO
+app.post('/salidas/fifo', async (req, res) => {
+  const { producto_id, cantidad_salida } = req.body;
+  if (!producto_id || !cantidad_salida) {
+    return res.status(400).json({ error: 'Datos de salida obligatorios' });
+  }
+  try {
+    let restante = cantidad_salida;
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const lotes = (await client.query(`
+        SELECT id,cantidad,costo_unitario
+        FROM lotes
+        WHERE producto_id=$1 AND cantidad>0
+        ORDER BY fecha_lote ASC
+      `, [producto_id])).rows;
+      for (const lote of lotes) {
+        if (restante <= 0) break;
+        const usar = Math.min(restante, lote.cantidad);
+        // registrar salida por lote
+        await client.query(`
+          INSERT INTO salidas_fifo (lote_id,producto_id,cantidad,costo_unitario,fecha)
+          VALUES($1,$2,$3,$4,$5)
+        `, [lote.id, producto_id, usar, lote.costo_unitario, new Date()]);
+        // actualizar lote
+        await client.query('UPDATE lotes SET cantidad = cantidad - $1 WHERE id=$2', [usar, lote.id]);
+        restante -= usar;
+      }
+      await client.query('COMMIT');
+      res.json({ message: 'Salida FIFO procesada', faltante: restante });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error en salida FIFO' });
+  }
+});
+
+// --- Salud ---
+app.get("/", (_, res) => res.send("Servidor funcionando..."));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
