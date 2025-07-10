@@ -72,8 +72,9 @@ app.post('/login', async (req, res) => {
     if (!ok) return res.status(401).json({ error: 'Contraseña incorrecta' });
     const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, process.env.JWT_SECRET, { expiresIn: '1h' });
     res.json({ message: 'Inicio de sesión exitoso!', token, role: rows[0].role });
-  } catch {
-    res.status(500).json({ error: 'Error en el servidor' });
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -306,21 +307,61 @@ app.post('/registersalida', async (req, res) => {
 });
 
 // --- Estadísticas ---
-app.get('/stats/masVendidos', async (_, res) => {
+// 1) Productos más vendidos este mes
+app.get("/stats/mas-vendidos-mes", async (_, res) => {
   try {
     const { rows } = await db.query(`
-      SELECT p.id,p.nombre,SUM(s.unidades_vendidas) AS total_vendidas
-      FROM salidas s
-      JOIN productos p ON p.id=s.producto_id
-      GROUP BY p.id,p.nombre
-      ORDER BY total_vendidas DESC
+      SELECT 
+        p.id,
+        p.nombre,
+        SUM(s.cantidad) AS total_vendido
+      FROM salidas_fifo s
+      JOIN productos p ON p.id = s.producto_id
+      WHERE date_trunc('month', s.fecha_salida) = date_trunc('month', CURRENT_DATE)
+      GROUP BY p.id, p.nombre
+      ORDER BY total_vendido DESC
       LIMIT 10
     `);
     res.json(rows);
-  } catch {
-    res.status(500).json({ error: 'Error al obtener más vendidos' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener más vendidos este mes" });
   }
 });
+
+// 2) Entradas del día de hoy
+app.get("/stats/entradas-hoy", async (_, res) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        COUNT(*) AS total_entradas
+      FROM lotes
+      WHERE date(fecha_lote) = CURRENT_DATE
+    `);
+    // devolvemos un array para homogeneidad con Recharts
+    res.json([{ total_entradas: parseInt(rows[0].total_entradas, 10) }]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener entradas de hoy" });
+  }
+});
+
+// 3) Productos con stock más bajo
+app.get("/stats/stock-bajo", async (_, res) => {
+  try {
+    const { rows } = await db.query(`
+      SELECT id, nombre, cantidad_total
+      FROM productos
+      ORDER BY cantidad_total ASC
+      LIMIT 10
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener stock bajo" });
+  }
+});
+
 
 // --- FIFO de lotes (básico) ---
 // Insertar lote
