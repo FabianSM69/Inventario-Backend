@@ -331,10 +331,10 @@ app.post('/lotes', async (req, res) => {
   }
   try {
     await db.query(`
-      INSERT INTO lotes
-      (producto_id,cantidad,costo_unitario,fecha_lote)
-      VALUES($1,$2,$3,$4)
-    `, [producto_id, cantidad, costo_unitario, fecha_lote || new Date()]);
+    INSERT INTO lotes
+      (producto_id, cantidad, cantidad_original, costo_unitario)
+    VALUES($1, $2, $2, $3)
+`, [producto_id, cantidad, costo_unitario]);
     res.json({ message: 'Lote registrado (FIFO)' });
   } catch (err) {
     console.error(err);
