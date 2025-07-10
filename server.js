@@ -380,48 +380,59 @@ app.put('/lotes/:id', async (req, res) => {
   }
 });
 // Salida FIFO
-app.post('/salidas/fifo', async (req, res) => {
-  const { producto_id, cantidad_salida } = req.body;
-  if (!producto_id || !cantidad_salida) {
-    return res.status(400).json({ error: 'Datos de salida obligatorios' });
-  }
-  try {
-    let restante = cantidad_salida;
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-      const lotes = (await client.query(`
-        SELECT id,cantidad,costo_unitario
-        FROM lotes
-        WHERE producto_id=$1 AND cantidad>0
-        ORDER BY fecha_lote ASC
-      `, [producto_id])).rows;
-      for (const lote of lotes) {
-        if (restante <= 0) break;
-        const usar = Math.min(restante, lote.cantidad);
-        // registrar salida por lote
-        await client.query(`
-          INSERT INTO salidas_fifo (lote_id,producto_id,cantidad,costo_unitario,fecha)
-          VALUES($1,$2,$3,$4,$5)
-        `, [lote.id, producto_id, usar, lote.costo_unitario, new Date()]);
-        // actualizar lote
-        await client.query('UPDATE lotes SET cantidad = cantidad - $1 WHERE id=$2', [usar, lote.id]);
-        restante -= usar;
-      }
-      await client.query('COMMIT');
-      res.json({ message: 'Salida FIFO procesada', faltante: restante });
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Error en salida FIFO' });
-  }
-});
+app.post("/salidas-fifo", async (req, res) => {
+  const {
+    producto_id, unidadesVendidas, unidadesDevueltas,
+    merma, precioVenta, motivoDevolucion, motivoMerma
+  } = req.body;
 
+  // 1) Obtén los lotes de ese producto ordenados por fecha_lote ASC
+  const lotes = await db.query(`
+    SELECT * FROM lotes
+      WHERE producto_id = $1
+      ORDER BY fecha_lote
+  `, [producto_id]);
+
+  let qtyToRemove = unidadesVendidas + merma - unidadesDevueltas; 
+    // o ajusta según lógica de devolución/merma
+
+  // 2) Recorre los lotes y ve consumiendo stock de cada uno:
+  for (const lote of lotes.rows) {
+    if (qtyToRemove <= 0) break;
+
+    const take = Math.min(qtyToRemove, lote.cantidad);
+    qtyToRemove -= take;
+
+    // a) Inserta la salida en salidas_fifo
+    await db.query(`
+      INSERT INTO salidas_fifo
+        (lote_id, producto_id, cantidad, costo_unitario, tipo_salida, motivo, precio_venta)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      lote.id,
+      producto_id,
+      take,
+      lote.costo_unitario,
+      "venta",                // o 'devolucion' / 'merma' según el caso
+      motivoDevolucion || motivoMerma,
+      precioVenta
+    ]);
+
+    // b) Actualiza el lote descontándole esa cantidad
+    await db.query(`
+      UPDATE lotes SET cantidad = cantidad - $1 WHERE id = $2
+    `, [take, lote.id]);
+  }
+
+  // 3) Finalmente actualiza el producto (stock total, etc.)
+  await db.query(`
+    UPDATE productos
+      SET cantidad_total = cantidad_total - $1
+      WHERE id = $2
+  `, [unidadesVendidas - unidadesDevueltas + merma, producto_id]);
+
+  res.json({ ok: true });
+});
 // --- Salud ---
 app.get("/", (_, res) => res.send("Servidor funcionando..."));
 
