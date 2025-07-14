@@ -54,30 +54,34 @@ app.post('/send-email', (req, res) => {
 
 // --- Autenticación ---
 app.post('/register', async (req, res) => {
-  const { username, password, role = "user" } = req.body;
-  const hashed = await bcrypt.hash(password, 10);
+  // Desestructuramos todos los campos que ahora esperamos
+  const { username, email, ownerName, phone, password, role = "user" } = req.body;
+
+  // Validaciones básicas (puedes extenderlas)
+  if (!username || !email || !ownerName || !phone || !password) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios' });
+  }
+
   try {
-    await db.query('INSERT INTO users (username,password,role) VALUES($1,$2,$3)', [username, hashed, role]);
+    // Hasheamos la contraseña
+    const hashed = await bcrypt.hash(password, 10);
+
+    // Insertamos con los nuevos campos
+    await db.query(
+      `INSERT INTO users
+         (username, email, owner_name, phone, password, role)
+       VALUES
+         ($1,       $2,    $3,         $4,    $5,       $6)`,
+      [username, email, ownerName, phone, hashed, role]
+    );
+
     res.json({ message: 'Usuario registrado exitosamente!' });
-  } catch {
+  } catch (err) {
+    console.error('REGISTER ERROR:', err);
+    // Si es violación de UNIQUE(email) o username, podrías detectar código de error
     res.status(500).json({ error: 'Error registrando usuario' });
   }
 });
-app.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  try {
-    const { rows } = await db.query('SELECT * FROM users WHERE username=$1', [username]);
-    if (!rows[0]) return res.status(401).json({ error: 'Usuario no encontrado' });
-    const ok = await bcrypt.compare(password, rows[0].password);
-    if (!ok) return res.status(401).json({ error: 'Contraseña incorrecta' });
-    const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    res.json({ message: 'Inicio de sesión exitoso!', token, role: rows[0].role });
-  } catch (err) {
-    console.error("LOGIN ERROR:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // --- Productos ---
 app.get('/getproductos', async (_, res) => {
   try {
@@ -87,6 +91,47 @@ app.get('/getproductos', async (_, res) => {
     res.status(500).json({ error: 'Error al obtener productos' });
   }
 });
+app.post('/login', async (req, res) => {
+  const { login, password } = req.body;
+  try {
+    // Busca por username o por email
+    const { rows } = await db.query(
+      `SELECT * FROM users WHERE username = $1 OR email = $1`,
+      [login]
+    );
+    const user = rows[0];
+    if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
+
+    // Compara contraseña
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Contraseña incorrecta' });
+
+    // Genera token
+    const token = jwt.sign(
+      { id: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    // Devuelve datos al cliente
+    res.json({
+      message: 'Inicio de sesión exitoso',
+      token,
+      role: user.role,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        ownerName: user.owner_name,
+        phone: user.phone
+      }
+    });
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    res.status(500).json({ error: 'Error interno en login' });
+  }
+});
+
 // 1) Modifica tu REGISTER PRODUCT para devolver el id
 app.post('/registerproduct', async (req, res) => {
   const { nombre, cantidad_entrada, cantidad_devuelta_cliente = 0, precio_unitario, imagen } = req.body;
