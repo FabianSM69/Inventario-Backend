@@ -1,4 +1,5 @@
 // server.js
+console.log("🔥 server.js arrancado");
 import dotenv from "dotenv";
 import express from "express";
 import { Pool } from "pg";
