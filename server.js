@@ -6,12 +6,15 @@ import cors from "cors";
 import bcrypt from "bcryptjs";
 import nodemailer from "nodemailer";
 import jwt from "jsonwebtoken";
+import multer from 'multer';
+const upload = multer({ dest: 'uploads/' });
 
 dotenv.config();
 const app = express();
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use(cors());
+app.use('/uploads', express.static('uploads'));
 
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -129,6 +132,45 @@ app.post('/login', async (req, res) => {
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: 'Error interno en login' });
+  }
+});
+
+// --- Middleware de autenticación JWT ---
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Token faltante' });
+
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = payload.id;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+}
+
+// --- Ruta para obtener datos del usuario logueado ---
+app.get('/user/me', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT 
+         id,
+         username,
+         email,
+         owner_name  AS "ownerName",
+         phone,
+         role,
+         photo_url   AS "photoUrl"
+       FROM users
+       WHERE id = $1`,
+      [req.userId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('ERROR /user/me:', err);
+    res.status(500).json({ error: 'Error al obtener perfil' });
   }
 });
 
@@ -516,6 +558,21 @@ app.post("/salidas-fifo", async (req, res) => {
 
   res.json({ ok: true });
 });
+
+app.post(
+  '/user/me/photo',
+  authenticateToken,
+  upload.single('profilePhoto'),
+  async (req, res) => {
+    // Aquí guardas el archivo y actualizas users.photo_url
+    const filePath = `/uploads/${req.file.filename}`;
+    await db.query(
+      'UPDATE users SET photo_url=$1 WHERE id=$2',
+      [filePath, req.userId]
+    );
+    res.json({ photoUrl: filePath });
+  }
+);
 // --- Salud ---
 app.get("/", (_, res) => res.send("Servidor funcionando..."));
 
