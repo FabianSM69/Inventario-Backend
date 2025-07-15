@@ -145,6 +145,7 @@ function authenticateToken(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.userId = payload.id;
+    req.userRole = payload.role;
     next();
   } catch {
     return res.status(401).json({ error: 'Token inválido' });
@@ -174,6 +175,55 @@ app.get('/user/me', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Error al obtener perfil' });
   }
 });
+app.get(
+  '/admin/users',
+  authenticateToken,
+  requireRole('superadmin'),
+  async (req, res) => {
+    const { rows } = await db.query(
+      'SELECT id, username, email, owner_name AS "ownerName", phone, role FROM users ORDER BY id'
+    );
+    res.json(rows);
+  }
+);
+
+// Cambiar rol de un usuario
+app.put(
+  '/admin/users/:id/role',
+  authenticateToken,
+  requireRole('superadmin'),
+  async (req, res) => {
+    const userId = +req.params.id;
+    const { role } = req.body;
+    const validRoles = ['user','admin','superadmin'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: 'Rol inválido' });
+    }
+    await db.query('UPDATE users SET role=$1 WHERE id=$2', [role,userId]);
+    res.json({ message: 'Rol actualizado' });
+  }
+);
+
+// Eliminar usuario
+app.delete(
+  '/admin/users/:id',
+  authenticateToken,
+  requireRole('superadmin'),
+  async (req, res) => {
+    const userId = +req.params.id;
+    await db.query('DELETE FROM users WHERE id=$1', [userId]);
+    res.json({ message: 'Usuario eliminado' });
+  }
+);
+export function requireRole(...allowed) {
+  return (req, res, next) => {
+    const role = req.userRole;            // lo guardas en authenticateToken
+    if (!allowed.includes(role)) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+    next();
+  };
+}
 
 // 1) Modifica tu REGISTER PRODUCT para devolver el id
 app.post('/registerproduct', async (req, res) => {
