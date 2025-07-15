@@ -195,7 +195,7 @@ app.put(
   async (req, res) => {
     const userId = +req.params.id;
     const { role } = req.body;
-    const validRoles = ['user','admin','superadmin'];
+    const validRoles = ['user','admin','superadmin']; 
     if (!validRoles.includes(role)) {
       return res.status(400).json({ error: 'Rol inválido' });
     }
