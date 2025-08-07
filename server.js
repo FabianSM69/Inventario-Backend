@@ -231,7 +231,6 @@ res.json({
   message: 'Inicio de sesión exitoso',
   token,
   role: user.role,
-  encryptedUser
 });
 
   } catch (err) {
