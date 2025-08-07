@@ -73,7 +73,7 @@ app.post('/register', async (req, res) => {
   const ownerNameRegex = /^[A-Za-zÁÉÍÓÚáéíóúÑñ ]{3,40}$/;
   const emailRegex = /\S+@\S+\.\S+/;
   const phoneRegex = /^\d{7,15}$/;
-  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d])[A-Za-z\d[^A-Za-z\d]]{8,}$/;
+  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$/;
 
   if (!usernameRegex.test(username)) {
     return res.status(400).json({ error: 'El nombre de usuario solo puede contener letras, números, guiones y guión bajo (3-20 caracteres).' });
