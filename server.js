@@ -231,7 +231,9 @@ res.json({
   message: 'Inicio de sesión exitoso',
   token,
   role: user.role,
+  user: userData
 });
+
 
   } catch (err) {
     console.error("LOGIN ERROR:", err);
