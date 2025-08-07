@@ -8,6 +8,10 @@ import bcrypt from "bcryptjs";
 import nodemailer from "nodemailer";
 import jwt from "jsonwebtoken";
 import multer from 'multer';
+import CryptoJS from "crypto-js";
+
+const loginAttempts = new Map(); // { loginValue: { count: 0, lastAttempt: Date } }
+const MAX_ATTEMPTS = 3;
 const upload = multer({ dest: 'uploads/' });
 
 dotenv.config();
@@ -58,34 +62,55 @@ app.post('/send-email', (req, res) => {
 
 // --- Autenticación ---
 app.post('/register', async (req, res) => {
-  // Desestructuramos todos los campos que ahora esperamos
   const { username, email, ownerName, phone, password, role = "user" } = req.body;
 
-  // Validaciones básicas (puedes extenderlas)
   if (!username || !email || !ownerName || !phone || !password) {
     return res.status(400).json({ error: 'Faltan campos obligatorios' });
   }
 
+  // Validaciones por regex
+  const usernameRegex = /^[a-zA-Z0-9_-]{3,20}$/;
+  const ownerNameRegex = /^[A-Za-zÁÉÍÓÚáéíóúÑñ ]{3,40}$/;
+  const emailRegex = /\S+@\S+\.\S+/;
+  const phoneRegex = /^\d{7,15}$/;
+  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d])[A-Za-z\d[^A-Za-z\d]]{8,}$/;
+
+  if (!usernameRegex.test(username)) {
+    return res.status(400).json({ error: 'El nombre de usuario solo puede contener letras, números, guiones y guión bajo (3-20 caracteres).' });
+  }
+
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ error: 'Correo electrónico inválido.' });
+  }
+
+  if (!ownerNameRegex.test(ownerName)) {
+    return res.status(400).json({ error: 'El nombre del dueño solo puede contener letras y espacios (3-40 caracteres).' });
+  }
+
+  if (!phoneRegex.test(phone)) {
+    return res.status(400).json({ error: 'Número de teléfono inválido (7-15 dígitos).' });
+  }
+
+  if (!passwordRegex.test(password)) {
+    return res.status(400).json({
+      error: 'La contraseña debe tener al menos 8 caracteres, incluyendo mayúsculas, minúsculas, números y un símbolo.'
+    });
+  }
+
   try {
-    // Hasheamos la contraseña
     const hashed = await bcrypt.hash(password, 10);
-
-    // Insertamos con los nuevos campos
     await db.query(
-      `INSERT INTO users
-         (username, email, owner_name, phone, password, role)
-       VALUES
-         ($1,       $2,    $3,         $4,    $5,       $6)`,
-      [username, email, ownerName, phone, hashed, role]
+      `INSERT INTO users (username, email, owner_name, phone, password, role)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [username.trim(), email.trim(), ownerName.trim(), phone.trim(), hashed, role]
     );
-
     res.json({ message: 'Usuario registrado exitosamente!' });
   } catch (err) {
     console.error('REGISTER ERROR:', err);
-    // Si es violación de UNIQUE(email) o username, podrías detectar código de error
     res.status(500).json({ error: 'Error registrando usuario' });
   }
 });
+
 // --- Productos ---
 app.get('/getproductos', async (_, res) => {
   try {
@@ -95,46 +120,121 @@ app.get('/getproductos', async (_, res) => {
     res.status(500).json({ error: 'Error al obtener productos' });
   }
 });
+//LOGIN
 app.post('/login', async (req, res) => {
   const { login, password } = req.body;
+
+  if (!login || !password) {
+    return res.status(400).json({ error: 'Usuario y contraseña son obligatorios.' });
+  }
+
+  const loginTrimmed = login.trim();
+  const passwordTrimmed = password.trim();
+
+  const emailRegex = /\S+@\S+\.\S+/;
+  const usernameRegex = /^[a-zA-Z0-9_-]{3,20}$/;
+
+  if (!emailRegex.test(loginTrimmed) && !usernameRegex.test(loginTrimmed)) {
+    return res.status(400).json({ error: 'Usuario o correo inválido.' });
+  }
+
+  if (passwordTrimmed.length < 6) {
+    return res.status(400).json({ error: 'Contraseña demasiado corta.' });
+  }
+
   try {
-    // Busca por username o por email
     const { rows } = await db.query(
       `SELECT * FROM users WHERE username = $1 OR email = $1`,
-      [login]
+      [loginTrimmed]
     );
     const user = rows[0];
-    if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
 
-    // Compara contraseña
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ error: 'Contraseña incorrecta' });
+    // --- GESTIÓN DE INTENTOS ---
+    const now = new Date();
+    const attempt = loginAttempts.get(loginTrimmed) || { count: 0, lastAttempt: null, blockedUntil: null };
 
-    // Genera token
+    // Si está bloqueado y aún no pasa el tiempo de desbloqueo
+    if (attempt.blockedUntil && now < attempt.blockedUntil) {
+      const minutosRestantes = Math.ceil((attempt.blockedUntil - now) / 60000);
+      return res.status(429).json({
+        error: `Demasiados intentos fallidos. Intenta nuevamente en ${minutosRestantes} minuto(s).`
+      });
+    }
+
+    // Si pasaron más de 30 minutos desde el último intento, reinicia el contador
+    if (attempt.lastAttempt && (now - new Date(attempt.lastAttempt)) > 30 * 60 * 1000) {
+      attempt.count = 0;
+      attempt.blockedUntil = null;
+    }
+
+    if (!user) {
+      attempt.count += 1;
+      attempt.lastAttempt = now;
+      loginAttempts.set(loginTrimmed, attempt);
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+    }
+
+    const match = await bcrypt.compare(passwordTrimmed, user.password);
+    if (!match) {
+      attempt.count += 1;
+      attempt.lastAttempt = now;
+
+      // Si llega al límite → bloquear 15 minutos
+      if (attempt.count >= MAX_ATTEMPTS) {
+        attempt.blockedUntil = new Date(now.getTime() + 15 * 60 * 1000); // 15 min
+        // Enviar correo solo una vez por intento 3
+        if (attempt.count === MAX_ATTEMPTS) {
+          const mailOptions = {
+            from: process.env.GMAIL_USER,
+            to: user.email,
+            subject: '⚠️ Intentos fallidos de inicio de sesión',
+            text: `Hola ${user.username},\n\nHemos detectado 3 intentos fallidos para acceder a tu cuenta.\n\n¿Eres tú quien está intentando iniciar sesión?\n\nSi no reconoces esta actividad, cambia tu contraseña inmediatamente.`,
+          };
+          transporter.sendMail(mailOptions, err => {
+            if (err) console.error('Error al enviar correo de advertencia:', err);
+            else console.log('Correo de advertencia enviado a', user.email);
+          });
+        }
+      }
+
+      loginAttempts.set(loginTrimmed, attempt);
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+    }
+
+    // Si pasa la autenticación
+    loginAttempts.delete(loginTrimmed); // Limpia el historial
+
     const token = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
 
-    // Devuelve datos al cliente
-    res.json({
-      message: 'Inicio de sesión exitoso',
-      token,
-      role: user.role,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        ownerName: user.owner_name,
-        phone: user.phone
-      }
-    });
+    const userData = {
+  id: user.id,
+  username: user.username,
+  email: user.email,
+  ownerName: user.owner_name,
+  phone: user.phone
+};
+
+// Encriptar los datos del usuario con AES y la clave
+const encryptedUser = CryptoJS.AES.encrypt(JSON.stringify(userData), process.env.ENCRYPT_KEY).toString();
+
+res.json({
+  message: 'Inicio de sesión exitoso',
+  token,
+  role: user.role,
+  encryptedUser
+});
+
   } catch (err) {
     console.error("LOGIN ERROR:", err);
-    res.status(500).json({ error: 'Error interno en login' });
+    res.status(500).json({ error: 'Error interno al procesar el login' });
   }
 });
+
+
 
 // --- Middleware de autenticación JWT ---
 function authenticateToken(req, res, next) {
