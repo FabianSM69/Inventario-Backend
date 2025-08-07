@@ -178,6 +178,10 @@ console.log("Password recibido:", password);
 console.log("Usuario encontrado en DB:", user);
 
     const match = await bcrypt.compare(passwordTrimmed, user.password);
+    console.log("¿Contraseña coincide?:", match);
+    console.log("Password recibido del frontend:", passwordTrimmed);
+console.log("Password en base de datos:", user.password);
+
     if (!match) {
       attempt.count += 1;
       attempt.lastAttempt = now;
