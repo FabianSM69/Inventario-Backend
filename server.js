@@ -173,6 +173,9 @@ app.post('/login', async (req, res) => {
       loginAttempts.set(loginTrimmed, attempt);
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
     }
+console.log("Login recibido:", login);
+console.log("Password recibido:", password);
+console.log("Usuario encontrado en DB:", user);
 
     const match = await bcrypt.compare(passwordTrimmed, user.password);
     if (!match) {
