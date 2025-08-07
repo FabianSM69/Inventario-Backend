@@ -226,7 +226,6 @@ console.log("Password en base de datos:", user.password);
 };
 
 // Encriptar los datos del usuario con AES y la clave
-const encryptedUser = CryptoJS.AES.encrypt(JSON.stringify(userData), process.env.ENCRYPT_KEY).toString();
 
 res.json({
   message: 'Inicio de sesión exitoso',
